@@ -1,0 +1,11 @@
+build/
+.cache/
+cmake-build-*/
+*.hhmap
+!examples/*.hhmap
+mining-facts.md
+
+.DS_Store
+*.user
+.idea/
+.vscode/

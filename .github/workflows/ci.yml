@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=ON
+      - name: Test
+        run: cmake --build build --config Release --target hhms_test && ctest --test-dir build -C Release --output-on-failure
+      - name: GUI
+        run: cmake --build build --config Release --target hhms

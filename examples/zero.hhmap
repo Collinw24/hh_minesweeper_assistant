@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "tiles": [
+    {"x": 0, "y": 0, "kind": "clear", "n": 0},
+    {"x": 4, "y": 0, "kind": "clear", "n": 1},
+    {"x": 5, "y": 0, "kind": "mine"}
+  ],
+  "supports": [
+    {"x": -6, "y": 0, "kind": "wood"}
+  ]
+}
