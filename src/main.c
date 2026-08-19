@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SIDE 268
-#define STATUS_H 28
+#define SIDE 280
+#define STATUS_H 36
 
 typedef enum {
     BRUSH_COUNT = 0,
@@ -37,23 +37,27 @@ typedef struct {
     char msg[256];
 } App;
 
-static const Color C_BG      = {16, 14, 13, 255};
-static const Color C_SIDE    = {28, 24, 21, 255};
-static const Color C_LINE    = {72, 64, 54, 255};
-static const Color C_WALL    = {58, 52, 44, 255};
-static const Color C_FLOOR   = {34, 30, 27, 255};
-static const Color C_OPEN    = {92, 78, 60, 255};
-static const Color C_SAFE    = {42, 96, 54, 255};
-static const Color C_MINE    = {150, 42, 36, 255};
-static const Color C_FLAG    = {176, 52, 40, 255};
+static const Color C_BG      = {14, 16, 18, 255};
+static const Color C_SIDE    = {22, 24, 28, 255};
+static const Color C_LINE    = {58, 62, 70, 255};
+static const Color C_WALL    = {64, 68, 74, 255};
+static const Color C_FLOOR   = {28, 30, 34, 255};
+static const Color C_OPEN    = {56, 82, 104, 255};
+static const Color C_SAFE    = {36, 122, 64, 255};
+static const Color C_MINE    = {168, 40, 38, 255};
+static const Color C_FLAG    = {196, 48, 42, 255};
 static const Color C_CONF    = {186, 46, 150, 255};
-static const Color C_HOVER   = {232, 196, 96, 255};
+static const Color C_HOVER   = {240, 204, 88, 255};
+static const Color C_LINK    = {80, 190, 230, 255};
 static const Color C_ORIGIN  = {220, 176, 72, 255};
-static const Color C_TEXT    = {228, 216, 196, 255};
-static const Color C_DIM     = {150, 138, 120, 255};
-static const Color C_BTN     = {48, 42, 36, 255};
-static const Color C_BTNH    = {70, 60, 48, 255};
-static const Color C_ON      = {120, 78, 28, 255};
+static const Color C_TEXT    = {228, 220, 208, 255};
+static const Color C_DIM     = {138, 144, 154, 255};
+static const Color C_BTN     = {40, 44, 50, 255};
+static const Color C_BTNH    = {58, 64, 72, 255};
+static const Color C_ON      = {118, 82, 32, 255};
+
+static const int NDX[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+static const int NDY[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
 static Color number_color(int n)
 {
@@ -74,9 +78,9 @@ static Color heat(float p)
 {
     if (p < 0.f)
         return C_WALL;
-    unsigned char r = (unsigned char)(80 + p * 160);
-    unsigned char g = (unsigned char)(90 - p * 50);
-    unsigned char b = (unsigned char)(40);
+    unsigned char r = (unsigned char)(70 + p * 170);
+    unsigned char g = (unsigned char)(110 - p * 70);
+    unsigned char b = (unsigned char)(48);
     return (Color){r, g, b, 255};
 }
 
@@ -100,6 +104,71 @@ static void set_msg(App *a, const char *s)
     a->msg[sizeof(a->msg) - 1] = 0;
 }
 
+static int still_rock(const HhmsMap *m, int x, int y)
+{
+    const HhmsTile *t = hhms_get(m, x, y);
+    if (!t)
+        return 1;
+    if (t->kind == HHMS_CLEAR || t->kind == HHMS_OPEN || t->kind == HHMS_MINE)
+        return 0;
+    if (t->mark == HHMS_MARK_SAFE || t->mark == HHMS_MARK_MINE)
+        return 0;
+    return 1;
+}
+
+static int is_adj8(int x0, int y0, int x1, int y1)
+{
+    int dx = x0 - x1;
+    int dy = y0 - y1;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    return dx <= 1 && dy <= 1 && (dx || dy);
+}
+
+/* 0 none, 1 linked rock, 2 the hovered number that explains them */
+static int link_role(const App *a, int x, int y)
+{
+    if (!a->hover_on)
+        return 0;
+    if (x == a->hx && y == a->hy)
+        return 0;
+    const HhmsTile *h = hhms_get(&a->map, a->hx, a->hy);
+    if (h && h->kind == HHMS_CLEAR) {
+        if (is_adj8(a->hx, a->hy, x, y) && still_rock(&a->map, x, y))
+            return 1;
+        return 0;
+    }
+    if (!still_rock(&a->map, a->hx, a->hy))
+        return 0;
+    if (h && (h->kind == HHMS_CLEAR || h->kind == HHMS_OPEN || h->kind == HHMS_MINE))
+        return 0;
+    if (h && (h->mark == HHMS_MARK_SAFE || h->mark == HHMS_MARK_MINE))
+        return 0;
+    /* hover unknown: light numbers that still count it, and other rocks those numbers still count */
+    for (int i = 0; i < 8; i++) {
+        int cx = a->hx + NDX[i];
+        int cy = a->hy + NDY[i];
+        const HhmsTile *c = hhms_get(&a->map, cx, cy);
+        if (!c || c->kind != HHMS_CLEAR)
+            continue;
+        if (x == cx && y == cy)
+            return 2;
+        if (is_adj8(cx, cy, x, y) && still_rock(&a->map, x, y))
+            return 1;
+    }
+    return 0;
+}
+
+static int remaining_for_clear(const HhmsMap *m, int x, int y)
+{
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        if (still_rock(m, x + NDX[i], y + NDY[i]))
+            n++;
+    }
+    return n;
+}
+
 static void app_init(App *a)
 {
     memset(a, 0, sizeof(*a));
@@ -113,14 +182,14 @@ static void app_init(App *a)
     a->sup = HHMS_SUP_WOOD;
     a->help = 1;
     strncpy(a->file, "mine.hhmap", sizeof(a->file) - 1);
-    set_msg(a, "Only count mined dust (0-8); mark Natural Galleries Floor (G).");
+    set_msg(a, "Hover a number to see which walls it still counts.");
 }
 
 static void solve_now(App *a)
 {
     hhms_solve(&a->map);
     if (a->map.contradiction)
-        set_msg(a, "Contradiction: a count cannot be right.");
+        set_msg(a, "Those numbers cannot all be true.");
 }
 
 static Rectangle grid_rect(void)
@@ -162,8 +231,8 @@ static int btn(Rectangle r, const char *label, int on)
     int hot = hit(r);
     DrawRectangleRec(r, on ? C_ON : (hot ? C_BTNH : C_BTN));
     DrawRectangleLinesEx(r, 1, on ? C_HOVER : C_LINE);
-    int tw = MeasureText(label, 16);
-    DrawText(label, (int)(r.x + (r.width - (float)tw) * 0.5f), (int)(r.y + 7), 16, C_TEXT);
+    int tw = MeasureText(label, 15);
+    DrawText(label, (int)(r.x + (r.width - (float)tw) * 0.5f), (int)(r.y + 6), 15, C_TEXT);
     return hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 
@@ -213,7 +282,7 @@ static void do_load(App *a)
         a->dirty = 0;
         a->map.nundo = 0;
         solve_now(a);
-        set_msg(a, "Loaded.");
+        set_msg(a, "Loaded. Hover a number to see what it still counts.");
     } else {
         set_msg(a, "Load failed.");
     }
@@ -224,18 +293,19 @@ static void do_new(App *a)
     hhms_init(&a->map);
     a->dirty = 0;
     a->confirm_new = 0;
-    set_msg(a, "New map started.");
+    set_msg(a, "New map. Hover a tile and type the dust count.");
 }
 
 static void request_new(App *a)
 {
     if (a->dirty && a->map.ntiles > 0) {
         a->confirm_new = 1;
-        set_msg(a, "Unsaved changes: press N again (or click Confirm) to clear.");
+        set_msg(a, "Unsaved changes: press N again to clear.");
     } else {
         do_new(a);
     }
 }
+
 static void handle_file_keys(App *a)
 {
     int ch = GetCharPressed();
@@ -330,6 +400,7 @@ static void handle_keys(App *a)
     if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    a->camy -= pan;
     if (IsKeyDown(KEY_DOWN)) a->camy += pan;
 }
+
 static void handle_mouse(App *a)
 {
     Vector2 m = GetMousePosition();
@@ -378,6 +449,15 @@ static void handle_mouse(App *a)
     }
 }
 
+static void draw_label(float sx, float sy, float cell, const char *s, Color c)
+{
+    int fs = cell > 30 ? 14 : 11;
+    if (cell < 22)
+        return;
+    int tw = MeasureText(s, fs);
+    DrawText(s, (int)(sx + (cell - (float)tw) * 0.5f), (int)(sy + (cell - (float)fs) * 0.5f), fs, c);
+}
+
 static void draw_tile(const App *a, int x, int y)
 {
     float sx, sy;
@@ -391,6 +471,7 @@ static void draw_tile(const App *a, int x, int y)
 
     const HhmsTile *t = hhms_get(&a->map, x, y);
     Color fill = C_WALL;
+    int show_pct = 0;
     if (t) {
         if (t->mark == HHMS_MARK_CONFLICT)
             fill = C_CONF;
@@ -404,13 +485,21 @@ static void draw_tile(const App *a, int x, int y)
             fill = C_SAFE;
         else if (t->mark == HHMS_MARK_MINE)
             fill = C_MINE;
-        else if (t->p_mine > 0.f)
+        else if (t->p_mine > 0.f && t->p_mine < 1.f) {
             fill = heat(t->p_mine);
+            show_pct = 1;
+        }
     }
     DrawRectangleRec(r, fill);
 
     if (hhms_covered(&a->map, x, y))
-        DrawRectangleRec(r, (Color){50, 90, 160, 50});
+        DrawRectangleRec(r, (Color){50, 90, 160, 46});
+
+    int link = link_role(a, x, y);
+    if (link == 1)
+        DrawRectangleLinesEx((Rectangle){sx + 2, sy + 2, a->cell - 4, a->cell - 4}, 2, C_LINK);
+    else if (link == 2)
+        DrawRectangleLinesEx((Rectangle){sx + 2, sy + 2, a->cell - 4, a->cell - 4}, 2, C_HOVER);
 
     if (x == 0 && y == 0)
         DrawRectangleLinesEx(r, 2, C_ORIGIN);
@@ -418,18 +507,21 @@ static void draw_tile(const App *a, int x, int y)
     if (t && t->kind == HHMS_CLEAR) {
         char buf[8];
         snprintf(buf, sizeof(buf), "%d", t->count);
-        int fs = a->cell > 24 ? 20 : 14;
+        int fs = a->cell > 24 ? 22 : 14;
         int tw = MeasureText(buf, fs);
         DrawText(buf, (int)(sx + (a->cell - (float)tw) * 0.5f), (int)(sy + (a->cell - (float)fs) * 0.5f), fs, number_color(t->count));
     } else if (t && (t->kind == HHMS_MINE || t->mark == HHMS_MARK_MINE)) {
-        int fs = a->cell > 24 ? 18 : 12;
-        int tw = MeasureText("X", fs);
-        DrawText("X", (int)(sx + (a->cell - (float)tw) * 0.5f), (int)(sy + (a->cell - (float)fs) * 0.5f), fs, RAYWHITE);
-    } else if (t && t->mark == HHMS_MARK_NONE && t->p_mine > 0.f && t->p_mine < 1.f && a->cell >= 22) {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", (int)(t->p_mine * 100.f + 0.5f));
-        int tw = MeasureText(buf, 12);
-        DrawText(buf, (int)(sx + (a->cell - (float)tw) * 0.5f), (int)(sy + a->cell * 0.5f - 6), 12, C_TEXT);
+        draw_label(sx, sy, a->cell, "CAVE", RAYWHITE);
+    } else if (t && t->mark == HHMS_MARK_SAFE) {
+        draw_label(sx, sy, a->cell, "DIG", RAYWHITE);
+    } else if (t && t->kind == HHMS_OPEN) {
+        draw_label(sx, sy, a->cell, "open", (Color){200, 220, 235, 255});
+    } else if (show_pct && a->cell >= 22) {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%d%%", (int)(t->p_mine * 100.f + 0.5f));
+        int fs = a->cell > 28 ? 14 : 12;
+        int tw = MeasureText(buf, fs);
+        DrawText(buf, (int)(sx + (a->cell - (float)tw) * 0.5f), (int)(sy + a->cell * 0.5f - (float)fs * 0.5f), fs, C_TEXT);
     }
 
     int si = hhms_support_index(&a->map, x, y);
@@ -457,7 +549,6 @@ static void draw_grid(const App *a)
         for (int x = x0; x <= x1; x++)
             draw_tile(a, x, y);
     }
-    /* grid lines */
     BeginScissorMode((int)g.x, (int)g.y, (int)g.width, (int)g.height);
     for (int x = x0; x <= x1 + 1; x++) {
         float sx, sy;
@@ -477,6 +568,12 @@ static void draw_grid(const App *a)
     EndScissorMode();
 }
 
+static void draw_swatch(int x, int y, Color c, const char *label)
+{
+    DrawRectangle(x, y, 12, 12, c);
+    DrawText(label, x + 16, y - 1, 12, C_TEXT);
+}
+
 static void draw_sidebar(App *a)
 {
     Rectangle s = side_rect();
@@ -487,8 +584,8 @@ static void draw_sidebar(App *a)
     int y = 10;
     DrawText("HH Minesweeper", x, y, 18, C_HOVER);
     y += 22;
-    DrawText("Mined dust: 0-8   Gallery floor: G", x, y, 12, C_DIM);
-    y += 20;
+    DrawText("Green DIG   Red CAVE   % chance", x, y, 12, C_DIM);
+    y += 18;
 
     Rectangle file_r = {(float)x, (float)y, s.width - 24, 24};
     DrawRectangleRec(file_r, a->edit_file ? C_BTNH : C_BTN);
@@ -499,23 +596,23 @@ static void draw_sidebar(App *a)
         a->edit_file = 1;
     y += 30;
 
-    if (btn((Rectangle){(float)x, (float)y, 118, 26}, "Save (S)", 0))
+    if (btn((Rectangle){(float)x, (float)y, 124, 26}, "Save (S)", 0))
         do_save(a);
-    if (btn((Rectangle){(float)x + 124, (float)y, 118, 26}, "Load (L)", 0))
+    if (btn((Rectangle){(float)x + 130, (float)y, 124, 26}, "Load (L)", 0))
         do_load(a);
     y += 30;
 
     if (a->confirm_new) {
-        if (btn((Rectangle){(float)x, (float)y, 118, 26}, "Confirm New", 1))
+        if (btn((Rectangle){(float)x, (float)y, 124, 26}, "Confirm New", 1))
             do_new(a);
-        if (btn((Rectangle){(float)x + 124, (float)y, 118, 26}, "Cancel", 0)) {
+        if (btn((Rectangle){(float)x + 130, (float)y, 124, 26}, "Cancel", 0)) {
             a->confirm_new = 0;
             set_msg(a, "New map cancelled.");
         }
     } else {
-        if (btn((Rectangle){(float)x, (float)y, 118, 26}, "New (N)", 0))
+        if (btn((Rectangle){(float)x, (float)y, 124, 26}, "New (N)", 0))
             request_new(a);
-        if (btn((Rectangle){(float)x + 124, (float)y, 118, 26}, a->topmost ? "Pinned (T)" : "Unpinned (T)", a->topmost)) {
+        if (btn((Rectangle){(float)x + 130, (float)y, 124, 26}, a->topmost ? "Pinned (T)" : "Unpinned", a->topmost)) {
             a->topmost = !a->topmost;
             if (a->topmost)
                 SetWindowState(FLAG_WINDOW_TOPMOST);
@@ -525,27 +622,26 @@ static void draw_sidebar(App *a)
     }
     y += 34;
 
-    DrawText("Dust Count", x, y, 12, C_DIM);
+    DrawText("You mined this (dust)", x, y, 12, C_DIM);
     y += 16;
     for (int i = 0; i <= 8; i++) {
         char num[4];
         char sub[16];
         snprintf(num, sizeof(num), "%d", i);
         if (i == 0)
-            snprintf(sub, sizeof(sub), "0 kg");
+            snprintf(sub, sizeof(sub), "no dust");
         else
             snprintf(sub, sizeof(sub), "0.0%d kg", i);
 
-        float bx = (float)x + (float)((i % 3) * 82);
+        float bx = (float)x + (float)((i % 3) * 84);
         float by = (float)y + (float)((i / 3) * 32);
-        Rectangle r = {bx, by, 78, 28};
+        Rectangle r = {bx, by, 80, 28};
         int on = (a->brush == BRUSH_COUNT && a->count == i);
         int hot = hit(r);
         DrawRectangleRec(r, on ? C_ON : (hot ? C_BTNH : C_BTN));
         DrawRectangleLinesEx(r, 1, on ? C_HOVER : C_LINE);
-        int nw = MeasureText(num, 14);
-        DrawText(num, (int)(r.x + 8), (int)(r.y + 6), 14, number_color(i));
-        DrawText(sub, (int)(r.x + 8 + nw + 6), (int)(r.y + 8), 10, C_TEXT);
+        DrawText(num, (int)(r.x + 6), (int)(r.y + 6), 14, number_color(i));
+        DrawText(sub, (int)(r.x + 22), (int)(r.y + 8), 10, C_TEXT);
         if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             a->brush = BRUSH_COUNT;
             a->count = i;
@@ -553,14 +649,14 @@ static void draw_sidebar(App *a)
     }
     y += 100;
 
-    if (btn((Rectangle){(float)x, (float)y, 118, 26}, "Floor (G)", a->brush == BRUSH_OPEN))
+    if (btn((Rectangle){(float)x, (float)y, 124, 26}, "Open floor (G)", a->brush == BRUSH_OPEN))
         a->brush = BRUSH_OPEN;
-    if (btn((Rectangle){(float)x + 124, (float)y, 118, 26}, "Flag (F)", a->brush == BRUSH_FLAG))
+    if (btn((Rectangle){(float)x + 130, (float)y, 124, 26}, "Flag cave (F)", a->brush == BRUSH_FLAG))
         a->brush = BRUSH_FLAG;
     y += 30;
-    if (btn((Rectangle){(float)x, (float)y, 118, 26}, "Erase (X)", a->brush == BRUSH_ERASE))
+    if (btn((Rectangle){(float)x, (float)y, 124, 26}, "Erase (X)", a->brush == BRUSH_ERASE))
         a->brush = BRUSH_ERASE;
-    if (btn((Rectangle){(float)x + 124, (float)y, 118, 26}, "Undo (U)", 0)) {
+    if (btn((Rectangle){(float)x + 130, (float)y, 124, 26}, "Undo (U)", 0)) {
         if (hhms_undo(&a->map)) {
             a->dirty = 1;
             solve_now(a);
@@ -568,78 +664,64 @@ static void draw_sidebar(App *a)
     }
     y += 32;
 
-    DrawText("Support (Shift-Click)", x, y, 12, C_DIM);
+    DrawText("Support (Shift-click)", x, y, 12, C_DIM);
     y += 16;
     const char *sn[4] = {"Wood", "Stone", "Beam", "Mon."};
     for (int i = 0; i < 4; i++) {
-        if (btn((Rectangle){(float)x + (float)(i * 62), (float)y, 58, 26}, sn[i], a->brush == BRUSH_SUPPORT && (int)a->sup == i)) {
+        if (btn((Rectangle){(float)x + (float)(i * 64), (float)y, 60, 24}, sn[i], a->brush == BRUSH_SUPPORT && (int)a->sup == i)) {
             a->brush = BRUSH_SUPPORT;
             a->sup = (HhmsSupportKind)i;
         }
     }
-    y += 32;
+    y += 30;
 
-    DrawText("Legend", x, y, 12, C_DIM);
+    DrawText("Read the board", x, y, 12, C_DIM);
     y += 16;
-    DrawRectangle(x, y, 12, 12, C_OPEN);
-    DrawText("floor", x + 16, y, 11, C_TEXT);
-    DrawRectangle(x + 72, y, 12, 12, C_FLOOR);
-    DrawText("cleared #", x + 88, y, 11, C_TEXT);
-    DrawRectangle(x + 164, y, 12, 12, C_MINE);
-    DrawText("cave-in", x + 180, y, 11, C_TEXT);
+    draw_swatch(x, y, C_SAFE, "DIG  mine this");
     y += 16;
-    DrawRectangle(x, y, 12, 12, C_SAFE);
-    DrawText("safe", x + 16, y, 11, C_TEXT);
-    DrawRectangle(x + 72, y, 12, 12, heat(0.45f));
-    DrawText("odds", x + 88, y, 11, C_TEXT);
-    DrawRectangle(x + 164, y, 12, 12, C_CONF);
-    DrawText("conflict", x + 180, y, 11, C_TEXT);
+    draw_swatch(x, y, C_MINE, "CAVE  will collapse");
     y += 16;
-    DrawRectangle(x, y, 12, 12, (Color){50, 90, 160, 180});
-    DrawText("supported", x + 16, y, 11, C_TEXT);
-    y += 20;
+    draw_swatch(x, y, heat(0.4f), "%  cave-in chance");
+    y += 16;
+    draw_swatch(x, y, C_OPEN, "open  floor, no number");
+    y += 16;
+    draw_swatch(x, y, C_FLOOR, "0-8  you mined this");
+    y += 16;
+    draw_swatch(x, y, C_WALL, "gray  still rock");
+    y += 18;
 
-    if (a->map.contradiction) {
-        DrawText("COUNTS DISAGREE", x, y, 13, C_CONF);
-        y += 18;
-    }
-
-    DrawText("H help   T pin   U undo", x, y, 11, C_DIM);
-    y += 14;
-    DrawText("0-8 count   G floor   F flag   X erase", x, y, 11, C_DIM);
-    y += 14;
-    DrawText("shift-click support   mid-drag / arrows", x, y, 11, C_DIM);
+    if (a->map.contradiction)
+        DrawText("COUNTS DISAGREE", x, y, 14, C_CONF);
+    else
+        DrawText("Hover a 1 to see its leftover walls.", x, y, 12, C_DIM);
 
     if (a->help) {
-        Rectangle box = {30, 30, (float)(GetScreenWidth() - SIDE - 60), (float)(GetScreenHeight() - STATUS_H - 60)};
-        if (box.width > 560) box.width = 560;
-        if (box.height > 360) box.height = 360;
-        DrawRectangleRec(box, (Color){20, 18, 16, 245});
+        Rectangle box = {28, 28, (float)(GetScreenWidth() - SIDE - 56), (float)(GetScreenHeight() - STATUS_H - 56)};
+        if (box.width > 540) box.width = 540;
+        if (box.height > 340) box.height = 340;
+        DrawRectangleRec(box, (Color){16, 18, 22, 248});
         DrawRectangleLinesEx(box, 2, C_HOVER);
 
-        int hx = (int)box.x + 20;
-        int hy = (int)box.y + 18;
-        DrawText("Quick Start Guide (H to toggle)", hx, hy, 18, C_HOVER);
+        int hx = (int)box.x + 18;
+        int hy = (int)box.y + 16;
+        DrawText("What to do (H hides this)", hx, hy, 18, C_HOVER);
         hy += 28;
-
         const char *lines[] = {
-            "1. Only type 0-8 on tiles you mined",
-            "   and whose dust you picked up.",
-            "2. Natural Gallery rooms have no dust:",
-            "   they must be marked Floor (G), never 0.",
-            "3. The first tile into a wall can cave in with no warning.",
-            "4. Water can hide cave-ins.",
-            "5. Green tiles are safe next; red tiles are cave-ins.",
-            "6. Right-click flags cave-ins; Shift-click places supports.",
-            "7. This is a live notebook; it never connects to H&H.",
+            "Type 0-8 only on a wall you just mined.",
+            "G marks open floor with no dust (galleries).",
+            "Green DIG = mine it. Red CAVE = do not.",
+            "A percent is cave-in chance, not safety.",
+            "Hover a number: cyan marks walls it still counts.",
+            "Hover a percent: cyan marks the other walls",
+            "  that share that number. That is why it is not 100%.",
+            "First wall into fresh rock can cave with no warning.",
         };
-        for (int i = 0; i < 9; i++) {
-            DrawText(lines[i], hx, hy, 13, C_TEXT);
-            hy += 24;
+        for (int i = 0; i < 8; i++) {
+            DrawText(lines[i], hx, hy, 14, C_TEXT);
+            hy += 22;
         }
-
-        Rectangle dismiss_r = {box.x + box.width - 170, box.y + box.height - 40, 150, 26};
-        if (btn(dismiss_r, "Got It (Esc/H)", 0))
+        Rectangle dismiss_r = {box.x + box.width - 168, box.y + box.height - 38, 150, 26};
+        if (btn(dismiss_r, "Got it (Esc)", 0))
             a->help = 0;
     }
 }
@@ -647,45 +729,35 @@ static void draw_sidebar(App *a)
 static void draw_status(const App *a)
 {
     int y = GetScreenHeight() - STATUS_H;
-    DrawRectangle(0, y, GetScreenWidth(), STATUS_H, (Color){12, 10, 9, 255});
-    char buf[256];
+    DrawRectangle(0, y, GetScreenWidth(), STATUS_H, (Color){10, 12, 14, 255});
+    char buf[320];
     if (a->hover_on) {
         const HhmsTile *t = hhms_get(&a->map, a->hx, a->hy);
-        const char *cov = hhms_covered(&a->map, a->hx, a->hy) ? "supported" : "unsupported";
-        char kind_buf[32];
-        const char *kind_str = "unmined";
-        if (t) {
-            if (t->mark == HHMS_MARK_CONFLICT)
-                kind_str = "conflict";
-            else if (t->kind == HHMS_OPEN)
-                kind_str = "floor";
-            else if (t->kind == HHMS_CLEAR) {
-                snprintf(kind_buf, sizeof(kind_buf), "cleared (dust %d)", t->count);
-                kind_str = kind_buf;
-            } else if (t->kind == HHMS_MINE || t->mark == HHMS_MARK_MINE)
-                kind_str = "cave-in";
-            else if (t->mark == HHMS_MARK_SAFE)
-                kind_str = "safe";
-            else if (t->p_mine > 0.f)
-                kind_str = "odds";
-        }
-        if (a->hx == 0 && a->hy == 0) {
-            if (t && t->p_mine >= 0.f && t->kind != HHMS_OPEN && t->kind != HHMS_CLEAR && t->kind != HHMS_MINE)
-                snprintf(buf, sizeof(buf), "Tile (0,0) [Origin]  %s  p=%.0f%%  %s | %s", kind_str, t->p_mine * 100.f, cov, a->msg);
-            else
-                snprintf(buf, sizeof(buf), "Tile (0,0) [Origin]  %s  %s | %s", kind_str, cov, a->msg);
+        const char *cov = hhms_covered(&a->map, a->hx, a->hy) ? "under support" : "no support";
+        if (t && t->kind == HHMS_CLEAR) {
+            int left = remaining_for_clear(&a->map, a->hx, a->hy);
+            snprintf(buf, sizeof(buf), "(%d,%d)  dust %d  %d wall%s still count  %s  |  %s",
+                     a->hx, a->hy, t->count, left, left == 1 ? "" : "s", cov, a->msg);
+        } else if (t && t->kind == HHMS_OPEN) {
+            snprintf(buf, sizeof(buf), "(%d,%d)  open floor, not a number  %s  |  %s", a->hx, a->hy, cov, a->msg);
+        } else if (t && (t->kind == HHMS_MINE || t->mark == HHMS_MARK_MINE)) {
+            snprintf(buf, sizeof(buf), "(%d,%d)  CAVE  do not mine  %s  |  %s", a->hx, a->hy, cov, a->msg);
+        } else if (t && t->mark == HHMS_MARK_SAFE) {
+            snprintf(buf, sizeof(buf), "(%d,%d)  DIG  this wall is safe  %s  |  %s", a->hx, a->hy, cov, a->msg);
+        } else if (t && t->p_mine > 0.f && t->p_mine < 1.f) {
+            snprintf(buf, sizeof(buf), "(%d,%d)  cave-in chance %.0f%%  not proved  %s  |  %s",
+                     a->hx, a->hy, t->p_mine * 100.f, cov, a->msg);
+        } else if (t && t->mark == HHMS_MARK_CONFLICT) {
+            snprintf(buf, sizeof(buf), "(%d,%d)  conflict  %s  |  %s", a->hx, a->hy, cov, a->msg);
         } else {
-            if (t && t->p_mine >= 0.f && t->kind != HHMS_OPEN && t->kind != HHMS_CLEAR && t->kind != HHMS_MINE)
-                snprintf(buf, sizeof(buf), "Tile (%d,%d)  %s  p=%.0f%%  %s | %s", a->hx, a->hy, kind_str, t->p_mine * 100.f, cov, a->msg);
-            else
-                snprintf(buf, sizeof(buf), "Tile (%d,%d)  %s  %s | %s", a->hx, a->hy, kind_str, cov, a->msg);
+            snprintf(buf, sizeof(buf), "(%d,%d)  unknown rock  %s  |  %s", a->hx, a->hy, cov, a->msg);
         }
     } else {
         snprintf(buf, sizeof(buf), "%s", a->msg);
     }
-    DrawText(buf, 10, y + 6, 14, C_TEXT);
+    DrawText(buf, 10, y + 10, 14, C_TEXT);
     if (a->dirty)
-        DrawText("*", GetScreenWidth() - SIDE - 20, y + 6, 16, C_HOVER);
+        DrawText("*", GetScreenWidth() - SIDE - 18, y + 8, 16, C_HOVER);
 }
 
 int main(int argc, char **argv)
@@ -696,11 +768,12 @@ int main(int argc, char **argv)
         strncpy(app.file, argv[1], sizeof(app.file) - 1);
         app.file[sizeof(app.file) - 1] = 0;
         do_load(&app);
+        app.help = 0;
     }
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_TOPMOST | FLAG_VSYNC_HINT);
     InitWindow(1100, 720, "HH Minesweeper");
-    SetWindowMinSize(820, 560);
+    SetWindowMinSize(840, 580);
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
 

@@ -18,16 +18,15 @@ Enter the digit from `0` through `8`, not the dust weight. As counts and flags a
 
 1. Start HH Minesweeper and keep it beside the game window. The board opens with tile `(0,0)` outlined as the origin; choose a consistent in-game tile to represent it.
 2. Mine a tile in Haven & Hearth and collect its dust. Hover the corresponding board square and press `0` through `8`. The key enters that count immediately. You can also select a count in the side panel and left-click or drag across squares.
-3. When you open an existing gallery floor rather than mining a wall, use the `Floor` tool as described in the safety notes below.
-4. Read the updated board. Green squares are proved safe and red squares are cave-ins. A numbered square is an observation you entered, not a recommendation from the program.
-5. If you observe a cave-in that is not already proved, hover it and press `F`, or right-click it, to add a flag. Press `X` to correct an entry and `U` to undo the last edit.
-6. Edit the filename in the side panel if needed, then press `S` to save the map. Press `L` later to load it.
+3. When you open gallery floor rather than mining a wall, mark it **Open floor** (`G`). Never type `0` on a room you did not mine.
+4. Read the board. **DIG** is a wall you can mine. **CAVE** will collapse. A percent is leftover cave-in chance, not a suggestion. Hover a number: cyan outlines the walls that number still counts. Hover a percent: cyan outlines the other walls that share that number.
+5. If you see a cave-in the solver has not proved, hover it and press `F`, or right-click, to flag it. Press `X` to correct an entry and `U` to undo.
 
 The board is unbounded. Pan and zoom as the mine grows; coordinates in the status bar help keep the notebook aligned with the game.
 
 ## Safety notes
 
-- Never enter `0` on a Natural Gallery room that you did not mine. Mark an opened gallery tile with `Floor` or `G`; it carries no dust observation.
+- Never enter `0` on a Natural Gallery room that you did not mine. Mark it **Open floor** (`G`); it carries no dust observation.
 - The first tile mined into a wall can randomly cave in before any neighboring dust could warn you.
 - Water can conceal a cave-in, so visible terrain alone may not account for a dust count.
 - Available supports are wood, stone, mine beam, and monumental. Their radii are 9, 11, 13, and 30 tile units respectively, and a support protects a tile only when the radius covers that tile's center. Dust still appears beneath support coverage and must be recorded normally.
@@ -36,15 +35,17 @@ The board is unbounded. Pan and zoom as the mine grows; coordinates in the statu
 
 | Appearance | Meaning |
 |---|---|
-| Dark wall square | No observation has been entered |
-| Brown floor square | Opened gallery floor |
-| Dark square with a colored number | Mined tile and its entered dust count |
-| Green | Proved safe by the entered information |
-| Red with `X` | Proved or manually flagged cave-in |
-| Brown-orange heat with a percentage | Local leftover cave-in probability among unresolved tiles; it is not a suggestion to click |
-| Magenta | Conflict: the entered counts and flags cannot all be true |
-| Blue wash | The tile center is covered by a support |
-| Gold outline | Board origin or current hover position |
+| Gray rock | No observation yet |
+| Slate **open** | Gallery / floor with no dust number (`G`) |
+| Dark square with a colored number | You mined this and entered its dust |
+| Green **DIG** | Proved safe to mine |
+| Red **CAVE** | Proved or flagged cave-in |
+| Orange heat with `N%` | Cave-in chance among leftover layouts |
+| Cyan outline | Walls that share the hovered number |
+| Magenta | The entered counts cannot all be true |
+| Blue wash | Tile center is under a support |
+| Gold outline | Origin `(0,0)` or the hovered tile |
+
 
 ## Controls
 
@@ -53,7 +54,7 @@ Most tools can be selected in the side panel and painted with the left mouse but
 | Input | Action |
 |---|---|
 | Hover + `0`–`8` | Enter the mined tile's dust count |
-| `G` / `Floor` | Mark opened gallery floor |
+| `G` / Open floor | Mark opened gallery floor |
 | `F` or right-click | Add or remove a cave-in flag |
 | `X` or Backspace | Erase the tile |
 | Left-click or left-drag | Apply the selected tool |
@@ -90,4 +91,4 @@ make test
 
 ## Project
 
-Contributions are described in [CONTRIBUTING.md](CONTRIBUTING.md). HH Minesweeper is maintained by [Collinw24](https://github.com/Collinw24) and released under the [MIT License](LICENSE).
+Release notes are in [CHANGELOG.md](CHANGELOG.md). Contributions are described in [CONTRIBUTING.md](CONTRIBUTING.md). HH Minesweeper is maintained by [Collinw24](https://github.com/Collinw24) and released under the [MIT License](LICENSE).

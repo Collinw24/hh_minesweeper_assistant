@@ -362,6 +362,37 @@ static void test_overlap_forces_shared(void)
     expect(mark_at(&m, 2, 0) == HHMS_MARK_MINE, "subset: extra cell is mine");
 }
 
+/* Screenshot board (8-neighborhood):
+ *   25  G  G  G  G
+ *   25  1  1  1  G
+ *   25  1  C  R  G
+ *   25  1  1  1  G
+ *   25  G  0  G  G
+ * C and R both touch the right-hand 1s, so exactly one of them is a mine.
+ * The left wall column adds extra valid layouts. C is not forced.
+ */
+static void test_screenshot_ring_not_forced(void)
+{
+    static HhmsMap m;
+    hhms_init(&m);
+    hhms_set_tile(&m, 1, 1, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 2, 1, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 3, 1, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 1, 2, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 1, 3, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 2, 3, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 3, 3, HHMS_CLEAR, 1, 0);
+    hhms_set_tile(&m, 2, 4, HHMS_CLEAR, 0, 0);
+    hhms_solve(&m);
+    expect(mark_at(&m, 2, 2) != HHMS_MARK_MINE, "center C is not forced");
+    expect(mark_at(&m, 3, 2) != HHMS_MARK_MINE, "right R is not forced");
+    float pc = p_at(&m, 2, 2);
+    float pr = p_at(&m, 3, 2);
+    expect(pc > 0.f && pc < 1.f, "center has leftover odds");
+    expect(pr > pc, "R more likely than C");
+}
+
+
 int main(void)
 {
     test_zero_clears_neighbors();
@@ -380,6 +411,8 @@ int main(void)
     test_save_load_empty_and_corrupt();
     test_solver_idempotence();
     test_overlap_forces_shared();
+    test_screenshot_ring_not_forced();
+
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

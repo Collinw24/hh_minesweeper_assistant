@@ -28,6 +28,8 @@ Run the window and exercise any controls or display behavior that your change af
 - Explain the user-visible problem and the behavior after the change.
 - Add or update tests when solver behavior, persistence, or another observable contract changes.
 - Update the README when controls, colors, build steps, releases, or mining guidance change.
+- Update [CHANGELOG.md](CHANGELOG.md) in the same pull request as a user-visible change.
+
 - Do not include generated build directories, binaries, save files, or unrelated cleanup.
 - Verify the GUI manually when the change affects the window, in addition to running `make test`.
 
