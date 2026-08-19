@@ -690,7 +690,7 @@ static void draw_status(const App *a)
 
 int main(int argc, char **argv)
 {
-    App app;
+    static App app;
     app_init(&app);
     if (argc > 1) {
         strncpy(app.file, argv[1], sizeof(app.file) - 1);

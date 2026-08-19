@@ -208,7 +208,7 @@ static int collect_constr(const HhmsMap *m, Constr *cs, int cap)
 
 static int apply_subset(HhmsMap *m)
 {
-    Constr cs[MAX_CONSTR];
+    static Constr cs[MAX_CONSTR];
     int nc = collect_constr(m, cs, MAX_CONSTR);
     int changed = 0;
     for (int i = 0; i < nc; i++) {
@@ -325,14 +325,14 @@ static int cell_id(Cell *cells, int *n, int cap, int x, int y)
 
 static int apply_enum(HhmsMap *m, int write_odds)
 {
-    Constr cs[MAX_CONSTR];
+    static Constr cs[MAX_CONSTR];
     int nc = collect_constr(m, cs, MAX_CONSTR);
     if (nc == 0)
         return 0;
 
-    Cell cells[MAX_CELLS];
+    static Cell cells[MAX_CELLS];
     int ncells = 0;
-    int cmap[MAX_CONSTR][8];
+    static int cmap[MAX_CONSTR][8];
     memset(cmap, -1, sizeof(cmap));
     for (int i = 0; i < nc; i++) {
         for (int k = 0; k < cs[i].n; k++) {

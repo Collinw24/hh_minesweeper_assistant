@@ -34,7 +34,7 @@ static float p_at(const HhmsMap *m, int x, int y)
 
 static void test_zero_clears_neighbors(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 0, 0);
     hhms_solve(&m);
@@ -50,7 +50,7 @@ static void test_zero_clears_neighbors(void)
 
 static void test_open_is_not_zero(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_OPEN, 0, 0);
     hhms_solve(&m);
@@ -78,7 +78,7 @@ static void test_open_is_not_zero(void)
 
 static void test_full_ring_all_mines(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 8, 0);
     hhms_solve(&m);
@@ -94,7 +94,7 @@ static void test_full_ring_all_mines(void)
 
 static void test_flagged_ring_last_cell_safe(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 7, 0);
     int n = 0;
@@ -112,7 +112,7 @@ static void test_flagged_ring_last_cell_safe(void)
 
 static void test_flag_reduces_remaining(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 1, 0);
     hhms_set_tile(&m, -1, 0, HHMS_MINE, 0, 0);
@@ -123,7 +123,7 @@ static void test_flag_reduces_remaining(void)
 
 static void test_contradiction_zero_next_to_mine(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 0, 0);
     hhms_set_tile(&m, 1, 0, HHMS_MINE, 0, 0);
@@ -133,7 +133,7 @@ static void test_contradiction_zero_next_to_mine(void)
 
 static void test_pattern_121(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     /* Isolated 1-2-1. Other neighbors are known mines; counts include them. */
     hhms_set_tile(&m, 0, 1, HHMS_CLEAR, 6, 0);
@@ -156,7 +156,7 @@ static void test_pattern_121(void)
 
 static void test_isolated_one_has_odds(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 1, 0);
     hhms_solve(&m);
@@ -167,7 +167,7 @@ static void test_isolated_one_has_odds(void)
 
 static void test_support_radius(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_add_support(&m, 0, 0, HHMS_SUP_WOOD, 0);
     expect(hhms_covered(&m, 0, 0), "wood covers self");
@@ -196,7 +196,7 @@ static void test_support_radius(void)
 
 static void test_undo_erase_and_support_del(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 4, 4, HHMS_CLEAR, 3, 1);
     expect(hhms_erase_tile(&m, 4, 4, 1) == 0, "erase tile ok");
@@ -215,7 +215,7 @@ static void test_undo_erase_and_support_del(void)
 
 static void test_contradiction_conflicting_clues(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     /* (0,0) requires 0 mines around it, but (0,2) with all other neighbors mined requires (0,1) to be mine */
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 0, 0);
@@ -250,7 +250,7 @@ static void test_save_load_empty_and_corrupt(void)
     }
     close(fd);
 #endif
-    HhmsMap a, b;
+    static HhmsMap a, b;
     hhms_init(&a);
     expect(hhms_save(&a, path) == 0, "save empty ok");
     expect(hhms_load(&b, path) == 0, "load empty ok");
@@ -262,7 +262,7 @@ static void test_save_load_empty_and_corrupt(void)
     if (f) {
         fputs("{ invalid json syntax ...", f);
         fclose(f);
-        HhmsMap c;
+        static HhmsMap c;
         hhms_init(&c);
         hhms_set_tile(&c, 1, 1, HHMS_CLEAR, 2, 0);
         expect(hhms_load(&c, path) == -1, "corrupted json rejected");
@@ -273,7 +273,7 @@ static void test_save_load_empty_and_corrupt(void)
 
 static void test_solver_idempotence(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 0, 0, HHMS_CLEAR, 1, 0);
     hhms_solve(&m);
@@ -303,7 +303,7 @@ static void test_save_load_roundtrip(void)
     }
     close(fd);
 #endif
-    HhmsMap a, b;
+    static HhmsMap a, b;
     hhms_init(&a);
     hhms_set_tile(&a, 2, -3, HHMS_CLEAR, 4, 0);
     hhms_set_tile(&a, 5, 5, HHMS_MINE, 0, 0);
@@ -324,7 +324,7 @@ static void test_save_load_roundtrip(void)
 
 static void test_undo_tile_and_support(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     hhms_set_tile(&m, 1, 1, HHMS_CLEAR, 2, 1);
     hhms_set_tile(&m, 1, 1, HHMS_MINE, 0, 1);
@@ -346,7 +346,7 @@ static void test_undo_tile_and_support(void)
 
 static void test_overlap_forces_shared(void)
 {
-    HhmsMap m;
+    static HhmsMap m;
     hhms_init(&m);
     /* 1 sees A,B; 2 sees A,B,C after mining every other neighbor. */
     hhms_set_tile(&m, 0, 1, HHMS_CLEAR, 6, 0);

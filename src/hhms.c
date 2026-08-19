@@ -509,8 +509,12 @@ int hhms_load(HhmsMap *m, const char *path)
     fclose(f);
     buf[n] = 0;
 
-    HhmsMap tmp;
-    hhms_init(&tmp);
+    HhmsMap *tmp = (HhmsMap *)malloc(sizeof(*tmp));
+    if (!tmp) {
+        free(buf);
+        return -1;
+    }
+    hhms_init(tmp);
     Json j = {buf, buf + n};
     int ok = 0;
     if (jneed(&j, '{')) {
@@ -527,7 +531,7 @@ int hhms_load(HhmsMap *m, const char *path)
             } else if (strcmp(key, "tiles") == 0) {
                 if (!jneed(&j, '[')) { ok = 0; break; }
                 while (!jpeek(&j, ']')) {
-                    if (!parse_tile_obj(&j, &tmp)) { ok = 0; break; }
+                    if (!parse_tile_obj(&j, tmp)) { ok = 0; break; }
                     if (jpeek(&j, ','))
                         j.p++;
                     else
@@ -537,7 +541,7 @@ int hhms_load(HhmsMap *m, const char *path)
             } else if (strcmp(key, "supports") == 0) {
                 if (!jneed(&j, '[')) { ok = 0; break; }
                 while (!jpeek(&j, ']')) {
-                    if (!parse_sup_obj(&j, &tmp)) { ok = 0; break; }
+                    if (!parse_sup_obj(&j, tmp)) { ok = 0; break; }
                     if (jpeek(&j, ','))
                         j.p++;
                     else
@@ -557,9 +561,12 @@ int hhms_load(HhmsMap *m, const char *path)
             ok = 0;
     }
     free(buf);
-    if (!ok)
+    if (!ok) {
+        free(tmp);
         return -1;
-    *m = tmp;
+    }
+    *m = *tmp;
+    free(tmp);
     rebuild_hash(m);
     return 0;
 }
