@@ -6,50 +6,150 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            binary: build/hhms
-            asset: hhms-macos
-          - os: windows-latest
-            binary: build/Release/hhms.exe
-            asset: hhms-windows.exe
-    runs-on: ${{ matrix.os }}
+  macos:
+    name: macOS universal release
+    runs-on: macos-latest
+    env:
+      PACKAGE: hhms-0.0.3-macos-universal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure universal application bundle
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DHHMS_BUILD_GUI=ON \
+            -DHHMS_MACOS_BUNDLE=ON
+      - name: Build
+        run: cmake --build build --config Release --target hhms hhms_test hhms_app_test --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install and archive
+        run: |
+          cmake --install build --config Release --prefix "${RUNNER_TEMP}/${PACKAGE}"
+          cmake -E chdir "${RUNNER_TEMP}" \
+            cmake -E tar cf "${GITHUB_WORKSPACE}/${PACKAGE}.zip" \
+            --format=zip "${PACKAGE}"
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  windows:
+    name: Windows x64 release
+    runs-on: windows-latest
+    env:
+      PACKAGE: hhms-0.0.3-windows-x64
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=ON
+        run: >-
+          cmake -S . -B build -A x64
+          -DHHMS_BUILD_GUI=ON
       - name: Build
-        run: cmake --build build --config Release --target hhms_test hhms
+        run: cmake --build build --config Release --target hhms hhms_test hhms_app_test --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
-      - name: Stage release asset
-        run: cmake -E copy "${{ matrix.binary }}" "${{ matrix.asset }}"
-      - name: Upload release asset
+      - name: Install and archive
+        shell: pwsh
+        run: |
+          cmake --install build --config Release --prefix "$env:RUNNER_TEMP\$env:PACKAGE"
+          cmake -E chdir "$env:RUNNER_TEMP" `
+            cmake -E tar cf "$env:GITHUB_WORKSPACE\$env:PACKAGE.zip" `
+            --format=zip "$env:PACKAGE"
+      - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}.zip
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  linux:
+    name: Linux x64 release
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE: hhms-0.0.3-linux-x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libgtk-3-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libx11-dev \
+            pkg-config
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DHHMS_BUILD_GUI=ON
+      - name: Build
+        run: cmake --build build --config Release --target hhms hhms_test hhms_app_test --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install and archive
+        run: |
+          cmake --install build --config Release --prefix "${RUNNER_TEMP}/${PACKAGE}"
+          cmake -E chdir "${RUNNER_TEMP}" \
+            cmake -E tar czf "${GITHUB_WORKSPACE}/${PACKAGE}.tar.gz" \
+            "${PACKAGE}"
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   release:
-    needs: build
+    name: Publish GitHub release
+    needs:
+      - macos
+      - windows
+      - linux
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Download release assets
+      - name: Download packages
         uses: actions/download-artifact@v4
         with:
-          pattern: hhms-*
+          pattern: hhms-0.0.3-*
           path: release-assets
           merge-multiple: true
+      - name: Generate SHA-256 checksums
+        working-directory: release-assets
+        run: |
+          sha256sum \
+            hhms-0.0.3-macos-universal.zip \
+            hhms-0.0.3-windows-x64.zip \
+            hhms-0.0.3-linux-x64.tar.gz \
+            > hhms-0.0.3-checksums.txt
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-assets/*
+          files: |
+            release-assets/hhms-0.0.3-macos-universal.zip
+            release-assets/hhms-0.0.3-windows-x64.zip
+            release-assets/hhms-0.0.3-linux-x64.tar.gz
+            release-assets/hhms-0.0.3-checksums.txt
           fail_on_unmatched_files: true
+          generate_release_notes: true

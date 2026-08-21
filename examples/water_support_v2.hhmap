@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "tiles": [
+    {"x": -1, "y": 0, "terrain": "rock", "kind": "open"},
+    {"x": 0, "y": 0, "terrain": "rock", "kind": "clear", "n": 1},
+    {"x": 1, "y": 0, "terrain": "water", "kind": "unknown"},
+    {"x": 2, "y": 0, "terrain": "rock", "kind": "mine"}
+  ],
+  "supports": [
+    {"x": 2.25, "y": 0.1, "kind": "wood", "orientation": "north"},
+    {"x": -2.5, "y": 1.0, "kind": "timber_tunnel", "orientation": "east"}
+  ],
+  "view": {"camx": 0.0, "camy": 0.0, "cell": 32.0, "ui_scale": 1.0}
+}

@@ -5,88 +5,232 @@
 static const int DX[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 static const int DY[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
-static int is_mine(const HhmsTile *t)
+static unsigned hash_xy(int x, int y)
 {
-    if (!t)
-        return 0;
-    return t->kind == HHMS_MINE || t->mark == HHMS_MARK_MINE;
+    unsigned h = (unsigned)x * 0x9E3779B9u ^ (unsigned)y * 0x85EBCA6Bu;
+    return h & (HHMS_HASH - 1);
 }
 
-static int is_clear(const HhmsTile *t)
+static int hash_find(const HhmsSlot *hash, int x, int y)
 {
-    return t && t->kind == HHMS_CLEAR;
+    unsigned h = hash_xy(x, y);
+    for (int n = 0; n < HHMS_HASH; n++) {
+        const HhmsSlot *slot = &hash[h];
+        if (slot->occ == 0)
+            return -1;
+        if (slot->occ == 1 && slot->x == x && slot->y == y)
+            return slot->ti;
+        h = (h + 1) & (HHMS_HASH - 1);
+    }
+    return -1;
 }
 
-static int is_safe(const HhmsTile *t)
+static int hash_put(HhmsSlot *hash, int x, int y, int index)
 {
-    if (!t)
-        return 0;
-    return t->kind == HHMS_CLEAR || t->kind == HHMS_OPEN || t->mark == HHMS_MARK_SAFE;
+    unsigned h = hash_xy(x, y);
+    for (int n = 0; n < HHMS_HASH; n++) {
+        HhmsSlot *slot = &hash[h];
+        if (slot->occ == 1 && slot->x == x && slot->y == y) {
+            slot->ti = index;
+            return 1;
+        }
+        if (slot->occ == 0 || slot->occ == 2) {
+            slot->occ = 1;
+            slot->x = x;
+            slot->y = y;
+            slot->ti = index;
+            return 1;
+        }
+        h = (h + 1) & (HHMS_HASH - 1);
+    }
+    return 0;
+}
+
+void hhms_analysis_init(HhmsAnalysis *analysis)
+{
+    memset(analysis, 0, sizeof(*analysis));
+    analysis->complete = 1;
+}
+
+const HhmsAnalysisCell *hhms_analysis_get(const HhmsAnalysis *analysis, int x, int y)
+{
+    int index = hash_find(analysis->hash, x, y);
+    return index >= 0 ? &analysis->cells[index] : NULL;
+}
+
+static HhmsAnalysisCell *analysis_get_mut(HhmsAnalysis *analysis, int x, int y)
+{
+    int index = hash_find(analysis->hash, x, y);
+    return index >= 0 ? &analysis->cells[index] : NULL;
+}
+
+static HhmsAnalysisCell *analysis_touch(HhmsAnalysis *analysis, int x, int y)
+{
+    HhmsAnalysisCell *cell = analysis_get_mut(analysis, x, y);
+    if (cell)
+        return cell;
+    if (analysis->ncells >= HHMS_MAX_TILES) {
+        analysis->limits |= HHMS_LIMIT_ANALYSIS_CELLS;
+        analysis->complete = 0;
+        return NULL;
+    }
+    int index = analysis->ncells++;
+    cell = &analysis->cells[index];
+    memset(cell, 0, sizeof(*cell));
+    cell->x = x;
+    cell->y = y;
+    if (!hash_put(analysis->hash, x, y, index)) {
+        analysis->ncells--;
+        analysis->limits |= HHMS_LIMIT_ANALYSIS_CELLS;
+        analysis->complete = 0;
+        return NULL;
+    }
+    return cell;
+}
+static HhmsAnalysisCell *analysis_touch_conflict(HhmsAnalysis *analysis,
+                                                 int x, int y)
+{
+    HhmsAnalysisCell *cell = analysis_get_mut(analysis, x, y);
+    if (cell)
+        return cell;
+    if (analysis->ncells < HHMS_MAX_TILES)
+        return analysis_touch(analysis, x, y);
+
+    analysis->limits |= HHMS_LIMIT_ANALYSIS_CELLS;
+    analysis->complete = 0;
+    for (int i = 0; i < analysis->ncells; i++) {
+        if (analysis->cells[i].mark == HHMS_MARK_CONFLICT)
+            continue;
+        cell = &analysis->cells[i];
+        memset(cell, 0, sizeof(*cell));
+        cell->x = x;
+        cell->y = y;
+        memset(analysis->hash, 0, sizeof(analysis->hash));
+        for (int j = 0; j < analysis->ncells; j++)
+            hash_put(analysis->hash, analysis->cells[j].x,
+                     analysis->cells[j].y, j);
+        return cell;
+    }
+    return NULL;
 }
 
 
-
-static int mark_safe(HhmsMap *m, int x, int y)
+static int observed_mine(const HhmsMap *map, int x, int y)
 {
-    HhmsTile *t = hhms_get_mut(m, x, y);
-    if (t && t->kind == HHMS_MINE) {
-        t->mark = HHMS_MARK_CONFLICT;
-        m->contradiction = 1;
+    const HhmsTile *tile = hhms_get(map, x, y);
+    return tile && tile->kind == HHMS_MINE;
+}
+
+static int observed_safe(const HhmsMap *map, int x, int y)
+{
+    const HhmsTile *tile = hhms_get(map, x, y);
+    return tile && (tile->kind == HHMS_CLEAR || tile->kind == HHMS_OPEN);
+}
+
+static int known_mine(const HhmsMap *map, const HhmsAnalysis *analysis, int x, int y)
+{
+    if (observed_mine(map, x, y))
+        return 1;
+    const HhmsAnalysisCell *cell = hhms_analysis_get(analysis, x, y);
+    return cell && cell->mark == HHMS_MARK_MINE;
+}
+
+static int known_safe(const HhmsMap *map, const HhmsAnalysis *analysis, int x, int y)
+{
+    if (observed_safe(map, x, y))
+        return 1;
+    const HhmsAnalysisCell *cell = hhms_analysis_get(analysis, x, y);
+    return cell && cell->mark == HHMS_MARK_SAFE;
+}
+
+static void set_reason(HhmsAnalysisCell *cell, HhmsReason reason,
+                       int x1, int y1, int x2, int y2)
+{
+    cell->reason = reason;
+    cell->reason_x[0] = x1;
+    cell->reason_y[0] = y1;
+    cell->reason_x[1] = x2;
+    cell->reason_y[1] = y2;
+}
+
+static void mark_conflict(HhmsAnalysis *analysis, int x, int y,
+                          HhmsReason reason, int x1, int y1, int x2, int y2)
+{
+    HhmsAnalysisCell *cell = analysis_touch_conflict(analysis, x, y);
+    analysis->contradiction = 1;
+    if (!cell)
+        return;
+    cell->mark = HHMS_MARK_CONFLICT;
+    cell->mine_models = 0;
+    cell->total_models = 0;
+    set_reason(cell, reason, x1, y1, x2, y2);
+}
+
+static int mark_safe(HhmsMap const *map, HhmsAnalysis *analysis, int x, int y,
+                     HhmsReason reason, int x1, int y1, int x2, int y2)
+{
+    if (observed_mine(map, x, y)) {
+        mark_conflict(analysis, x, y, reason, x1, y1, x2, y2);
+        mark_conflict(analysis, x1, y1, reason, x, y, x2, y2);
         return 0;
     }
-    if (is_safe(t))
+    if (observed_safe(map, x, y))
         return 0;
-    if (t && t->mark == HHMS_MARK_CONFLICT) {
-        m->contradiction = 1;
-        return 0;
-    }
-    t = hhms_touch(m, x, y);
-    if (!t)
-        return 0;
-    if (t->mark == HHMS_MARK_MINE) {
-        t->mark = HHMS_MARK_CONFLICT;
-        m->contradiction = 1;
+    HhmsAnalysisCell *cell = analysis_get_mut(analysis, x, y);
+    if (cell && cell->mark == HHMS_MARK_CONFLICT) {
+        analysis->contradiction = 1;
         return 0;
     }
-    if (t->mark == HHMS_MARK_CONFLICT) {
-        m->contradiction = 1;
+    if (cell && cell->mark == HHMS_MARK_MINE) {
+        mark_conflict(analysis, x, y, reason, x1, y1, x2, y2);
+        mark_conflict(analysis, x1, y1, reason, x, y, x2, y2);
         return 0;
     }
-    t->mark = HHMS_MARK_SAFE;
-    t->p_mine = 0.f;
+    if (cell && cell->mark == HHMS_MARK_SAFE)
+        return 0;
+    cell = analysis_touch(analysis, x, y);
+    if (!cell)
+        return 0;
+    cell->mark = HHMS_MARK_SAFE;
+    if (cell->total_models == 0) {
+        cell->mine_models = 0;
+        cell->total_models = 1;
+    }
+    set_reason(cell, reason, x1, y1, x2, y2);
     return 1;
 }
 
-static int mark_mine(HhmsMap *m, int x, int y)
+static int mark_mine(HhmsMap const *map, HhmsAnalysis *analysis, int x, int y,
+                     HhmsReason reason, int x1, int y1, int x2, int y2)
 {
-    HhmsTile *t = hhms_get_mut(m, x, y);
-    if (t && (t->kind == HHMS_CLEAR || t->kind == HHMS_OPEN)) {
-        t->mark = HHMS_MARK_CONFLICT;
-        m->contradiction = 1;
+    if (observed_safe(map, x, y)) {
+        mark_conflict(analysis, x, y, reason, x1, y1, x2, y2);
+        mark_conflict(analysis, x1, y1, reason, x, y, x2, y2);
         return 0;
     }
-    if (t && t->kind == HHMS_MINE)
+    if (observed_mine(map, x, y))
         return 0;
-    if (t && t->mark == HHMS_MARK_MINE)
-        return 0;
-    if (t && t->mark == HHMS_MARK_CONFLICT) {
-        m->contradiction = 1;
-        return 0;
-    }
-    t = hhms_touch(m, x, y);
-    if (!t)
-        return 0;
-    if (t->mark == HHMS_MARK_SAFE) {
-        t->mark = HHMS_MARK_CONFLICT;
-        m->contradiction = 1;
+    HhmsAnalysisCell *cell = analysis_get_mut(analysis, x, y);
+    if (cell && cell->mark == HHMS_MARK_CONFLICT) {
+        analysis->contradiction = 1;
         return 0;
     }
-    if (t->mark == HHMS_MARK_CONFLICT) {
-        m->contradiction = 1;
+    if (cell && cell->mark == HHMS_MARK_SAFE) {
+        mark_conflict(analysis, x, y, reason, x1, y1, x2, y2);
+        mark_conflict(analysis, x1, y1, reason, x, y, x2, y2);
         return 0;
     }
-    t->mark = HHMS_MARK_MINE;
-    t->p_mine = 1.f;
+    if (cell && cell->mark == HHMS_MARK_MINE)
+        return 0;
+    cell = analysis_touch(analysis, x, y);
+    if (!cell)
+        return 0;
+    cell->mark = HHMS_MARK_MINE;
+    if (cell->total_models == 0) {
+        cell->mine_models = 1;
+        cell->total_models = 1;
+    }
+    set_reason(cell, reason, x1, y1, x2, y2);
     return 1;
 }
 
@@ -94,55 +238,53 @@ typedef struct {
     int x[8], y[8];
     int n;
     int need;
-} Constr;
+    int clue_x, clue_y;
+} Constraint;
 
-static int gather(const HhmsMap *m, const HhmsTile *c, Constr *out)
+static void gather(const HhmsMap *map, const HhmsAnalysis *analysis,
+                   const HhmsTile *clue, Constraint *out)
 {
-    out->n = 0;
-    out->need = c->count;
+    memset(out, 0, sizeof(*out));
+    out->need = clue->count;
+    out->clue_x = clue->x;
+    out->clue_y = clue->y;
     for (int i = 0; i < 8; i++) {
-        int x = c->x + DX[i];
-        int y = c->y + DY[i];
-        const HhmsTile *t = hhms_get(m, x, y);
-        if (is_clear(t))
-            continue;
-        if (is_mine(t)) {
+        int x = clue->x + DX[i];
+        int y = clue->y + DY[i];
+        if (known_mine(map, analysis, x, y)) {
             out->need--;
-            continue;
+        } else if (!known_safe(map, analysis, x, y)) {
+            out->x[out->n] = x;
+            out->y[out->n] = y;
+            out->n++;
         }
-        if (is_safe(t))
-            continue;
-        if (out->n >= 8)
-            return 0;
-        out->x[out->n] = x;
-        out->y[out->n] = y;
-        out->n++;
     }
-    return 1;
 }
 
-static int apply_simple(HhmsMap *m)
+static int apply_simple(const HhmsMap *map, HhmsAnalysis *analysis)
 {
     int changed = 0;
-    int n = m->ntiles;
-    for (int i = 0; i < n; i++) {
-        HhmsTile *c = &m->tiles[i];
-        if (c->kind != HHMS_CLEAR)
+    for (int i = 0; i < map->ntiles; i++) {
+        const HhmsTile *clue = &map->tiles[i];
+        if (clue->kind != HHMS_CLEAR)
             continue;
-        Constr g;
-        if (!gather(m, c, &g))
-            continue;
-        if (g.need < 0 || g.need > g.n) {
-            c->mark = HHMS_MARK_CONFLICT;
-            m->contradiction = 1;
+        Constraint constraint;
+        gather(map, analysis, clue, &constraint);
+        if (constraint.need < 0 || constraint.need > constraint.n) {
+            mark_conflict(analysis, clue->x, clue->y, HHMS_REASON_SIMPLE,
+                          clue->x, clue->y, 0, 0);
             continue;
         }
-        if (g.need == 0) {
-            for (int k = 0; k < g.n; k++)
-                changed |= mark_safe(m, g.x[k], g.y[k]);
-        } else if (g.need == g.n) {
-            for (int k = 0; k < g.n; k++)
-                changed |= mark_mine(m, g.x[k], g.y[k]);
+        if (constraint.need == 0) {
+            for (int k = 0; k < constraint.n; k++) {
+                changed |= mark_safe(map, analysis, constraint.x[k], constraint.y[k],
+                                     HHMS_REASON_SIMPLE, clue->x, clue->y, 0, 0);
+            }
+        } else if (constraint.need == constraint.n) {
+            for (int k = 0; k < constraint.n; k++) {
+                changed |= mark_mine(map, analysis, constraint.x[k], constraint.y[k],
+                                     HHMS_REASON_SIMPLE, clue->x, clue->y, 0, 0);
+            }
         }
     }
     return changed;
@@ -153,12 +295,12 @@ static int same_cell(int x1, int y1, int x2, int y2)
     return x1 == x2 && y1 == y2;
 }
 
-static int is_subset(const Constr *a, const Constr *b)
+static int is_subset(const Constraint *small, const Constraint *big)
 {
-    for (int i = 0; i < a->n; i++) {
+    for (int i = 0; i < small->n; i++) {
         int found = 0;
-        for (int j = 0; j < b->n; j++) {
-            if (same_cell(a->x[i], a->y[i], b->x[j], b->y[j])) {
+        for (int j = 0; j < big->n; j++) {
+            if (same_cell(small->x[i], small->y[i], big->x[j], big->y[j])) {
                 found = 1;
                 break;
             }
@@ -169,68 +311,79 @@ static int is_subset(const Constr *a, const Constr *b)
     return 1;
 }
 
-static int extra_cells(const Constr *big, const Constr *small, Constr *out)
+static void extra_cells(const Constraint *big, const Constraint *small,
+                        Constraint *out)
 {
-    out->n = 0;
+    memset(out, 0, sizeof(*out));
     for (int i = 0; i < big->n; i++) {
-        int in_small = 0;
+        int found = 0;
         for (int j = 0; j < small->n; j++) {
             if (same_cell(big->x[i], big->y[i], small->x[j], small->y[j])) {
-                in_small = 1;
+                found = 1;
                 break;
             }
         }
-        if (!in_small) {
+        if (!found) {
             out->x[out->n] = big->x[i];
             out->y[out->n] = big->y[i];
             out->n++;
         }
     }
     out->need = big->need - small->need;
-    return 1;
 }
 
-#define MAX_CONSTR 2048
-
-static int collect_constr(const HhmsMap *m, Constr *cs, int cap)
+static int collect_constraints(const HhmsMap *map, const HhmsAnalysis *analysis,
+                               Constraint *constraints)
 {
-    int n = 0;
-    for (int i = 0; i < m->ntiles && n < cap; i++) {
-        if (m->tiles[i].kind != HHMS_CLEAR)
+    int count = 0;
+    for (int i = 0; i < map->ntiles; i++) {
+        if (map->tiles[i].kind != HHMS_CLEAR)
             continue;
-        if (!gather(m, &m->tiles[i], &cs[n]))
-            continue;
-        if (cs[n].n > 0)
-            n++;
+        gather(map, analysis, &map->tiles[i], &constraints[count]);
+        if (constraints[count].n > 0)
+            count++;
     }
-    return n;
+    return count;
 }
 
-static int apply_subset(HhmsMap *m)
+static int apply_subset(const HhmsMap *map, HhmsAnalysis *analysis)
 {
-    static Constr cs[MAX_CONSTR];
-    int nc = collect_constr(m, cs, MAX_CONSTR);
+    static Constraint constraints[HHMS_MAX_TILES];
+    int count = collect_constraints(map, analysis, constraints);
     int changed = 0;
-    for (int i = 0; i < nc; i++) {
-        for (int j = 0; j < nc; j++) {
-            if (i == j || cs[i].n == 0 || cs[j].n == 0)
+    for (int i = 0; i < count; i++) {
+        for (int j = 0; j < count; j++) {
+            if (i == j || !is_subset(&constraints[i], &constraints[j]))
                 continue;
-            if (!is_subset(&cs[i], &cs[j]))
-                continue;
-            Constr ex;
-            extra_cells(&cs[j], &cs[i], &ex);
-            if (ex.need < 0 || ex.need > ex.n) {
-                m->contradiction = 1;
+            Constraint extra;
+            extra_cells(&constraints[j], &constraints[i], &extra);
+            if (extra.need < 0 || extra.need > extra.n) {
+                mark_conflict(analysis, constraints[i].clue_x,
+                              constraints[i].clue_y, HHMS_REASON_SUBSET,
+                              constraints[i].clue_x, constraints[i].clue_y,
+                              constraints[j].clue_x, constraints[j].clue_y);
+                mark_conflict(analysis, constraints[j].clue_x,
+                              constraints[j].clue_y, HHMS_REASON_SUBSET,
+                              constraints[i].clue_x, constraints[i].clue_y,
+                              constraints[j].clue_x, constraints[j].clue_y);
                 continue;
             }
-            if (ex.n == 0)
+            if (extra.n == 0)
                 continue;
-            if (ex.need == 0) {
-                for (int k = 0; k < ex.n; k++)
-                    changed |= mark_safe(m, ex.x[k], ex.y[k]);
-            } else if (ex.need == ex.n) {
-                for (int k = 0; k < ex.n; k++)
-                    changed |= mark_mine(m, ex.x[k], ex.y[k]);
+            if (extra.need == 0) {
+                for (int k = 0; k < extra.n; k++) {
+                    changed |= mark_safe(map, analysis, extra.x[k], extra.y[k],
+                                         HHMS_REASON_SUBSET,
+                                         constraints[i].clue_x, constraints[i].clue_y,
+                                         constraints[j].clue_x, constraints[j].clue_y);
+                }
+            } else if (extra.need == extra.n) {
+                for (int k = 0; k < extra.n; k++) {
+                    changed |= mark_mine(map, analysis, extra.x[k], extra.y[k],
+                                         HHMS_REASON_SUBSET,
+                                         constraints[i].clue_x, constraints[i].clue_y,
+                                         constraints[j].clue_x, constraints[j].clue_y);
+                }
             }
         }
     }
@@ -241,228 +394,281 @@ typedef struct {
     int x, y;
 } Cell;
 
-static int popcnt(unsigned v)
-{
-    v = v - ((v >> 1) & 0x55555555u);
-    v = (v & 0x33333333u) + ((v >> 2) & 0x33333333u);
-    return (int)((((v + (v >> 4)) & 0x0F0F0F0Fu) * 0x01010101u) >> 24);
-}
-
 typedef struct {
     unsigned mask;
     int need;
-} BitC;
+    int constraint_index;
+} BitConstraint;
 
 typedef struct {
-    unsigned long long nvalid;
-    unsigned long long minec[HHMS_ENUM_MAX];
+    uint64_t valid;
+    uint64_t mine_count[HHMS_ENUM_MAX];
     int n;
-    int nc;
-    BitC cs[256];
-} EnumAcc;
+    int constraint_count;
+    BitConstraint constraints[HHMS_ENUM_MAX * 8];
+} Enumeration;
 
-static int partial_ok(const EnumAcc *e, int bit, unsigned assigned)
+static int popcount32(unsigned value)
 {
-    unsigned decided = bit == 0 ? 0u : ((1u << bit) - 1u);
-    for (int i = 0; i < e->nc; i++) {
-        unsigned m = e->cs[i].mask;
-        int have = popcnt(assigned & m & decided);
-        int remain = popcnt(m & ~decided);
-        if (have > e->cs[i].need || have + remain < e->cs[i].need)
+    value = value - ((value >> 1) & 0x55555555u);
+    value = (value & 0x33333333u) + ((value >> 2) & 0x33333333u);
+    return (int)((((value + (value >> 4)) & 0x0F0F0F0Fu) * 0x01010101u) >> 24);
+}
+
+static int partial_valid(const Enumeration *enumeration, int decided_bits,
+                         unsigned assigned)
+{
+    unsigned decided = decided_bits == 0 ? 0u : ((1u << decided_bits) - 1u);
+    for (int i = 0; i < enumeration->constraint_count; i++) {
+        unsigned mask = enumeration->constraints[i].mask;
+        int have = popcount32(assigned & mask & decided);
+        int remaining = popcount32(mask & ~decided);
+        if (have > enumeration->constraints[i].need ||
+            have + remaining < enumeration->constraints[i].need)
             return 0;
     }
     return 1;
 }
 
-static void enum_rec(EnumAcc *e, int bit, unsigned assigned)
+static void enumerate(Enumeration *enumeration, int bit, unsigned assigned)
 {
-    if (bit == e->n) {
-        e->nvalid++;
-        for (int i = 0; i < e->n; i++) {
+    if (bit == enumeration->n) {
+        enumeration->valid++;
+        for (int i = 0; i < enumeration->n; i++) {
             if (assigned & (1u << i))
-                e->minec[i]++;
+                enumeration->mine_count[i]++;
         }
         return;
     }
-    if (partial_ok(e, bit + 1, assigned))
-        enum_rec(e, bit + 1, assigned);
-    unsigned with = assigned | (1u << bit);
-    if (partial_ok(e, bit + 1, with))
-        enum_rec(e, bit + 1, with);
+    if (partial_valid(enumeration, bit + 1, assigned))
+        enumerate(enumeration, bit + 1, assigned);
+    unsigned with_mine = assigned | (1u << bit);
+    if (partial_valid(enumeration, bit + 1, with_mine))
+        enumerate(enumeration, bit + 1, with_mine);
 }
 
-static int uf_find(int *p, int a)
+static int union_find(int *parent, int item)
 {
-    while (p[a] != a) {
-        p[a] = p[p[a]];
-        a = p[a];
+    while (parent[item] != item) {
+        parent[item] = parent[parent[item]];
+        item = parent[item];
     }
-    return a;
+    return item;
 }
 
-static void uf_union(int *p, int a, int b)
+static void union_cells(int *parent, int a, int b)
 {
-    a = uf_find(p, a);
-    b = uf_find(p, b);
+    a = union_find(parent, a);
+    b = union_find(parent, b);
     if (a != b)
-        p[b] = a;
+        parent[b] = a;
 }
 
-static int cell_id(Cell *cells, int *n, int cap, int x, int y)
+static int cell_id(Cell *cells, int *count, int x, int y)
 {
-    for (int i = 0; i < *n; i++) {
+    for (int i = 0; i < *count; i++) {
         if (cells[i].x == x && cells[i].y == y)
             return i;
     }
-    if (*n >= cap)
+    if (*count >= HHMS_MAX_TILES)
         return -1;
-    cells[*n].x = x;
-    cells[*n].y = y;
-    return (*n)++;
+    cells[*count].x = x;
+    cells[*count].y = y;
+    return (*count)++;
+}
+static void mark_limited_component(HhmsAnalysis *analysis, const Cell *cells,
+                                   int cell_count, int *parent, int root)
+{
+    for (int i = 0; i < cell_count; i++) {
+        if (union_find(parent, i) != root)
+            continue;
+        HhmsAnalysisCell *cell = analysis_touch(analysis, cells[i].x, cells[i].y);
+        if (cell)
+            cell->model_limited = 1;
+    }
 }
 
-#define MAX_CELLS 1024
 
-static int apply_enum(HhmsMap *m, int write_odds)
+static int apply_enumeration(const HhmsMap *map, HhmsAnalysis *analysis,
+                             int write_models, int promote)
 {
-    static Constr cs[MAX_CONSTR];
-    int nc = collect_constr(m, cs, MAX_CONSTR);
-    if (nc == 0)
+    static Constraint constraints[HHMS_MAX_TILES];
+    static Cell cells[HHMS_MAX_TILES];
+    static int cell_map[HHMS_MAX_TILES][8];
+    int constraint_count = collect_constraints(map, analysis, constraints);
+    if (constraint_count == 0)
         return 0;
-
-    static Cell cells[MAX_CELLS];
-    int ncells = 0;
-    static int cmap[MAX_CONSTR][8];
-    memset(cmap, -1, sizeof(cmap));
-    for (int i = 0; i < nc; i++) {
-        for (int k = 0; k < cs[i].n; k++) {
-            int id = cell_id(cells, &ncells, MAX_CELLS, cs[i].x[k], cs[i].y[k]);
-            if (id < 0)
+    int cell_count = 0;
+    memset(cell_map, -1, sizeof(cell_map));
+    for (int i = 0; i < constraint_count; i++) {
+        for (int k = 0; k < constraints[i].n; k++) {
+            int id = cell_id(cells, &cell_count, constraints[i].x[k], constraints[i].y[k]);
+            if (id < 0) {
+                analysis->limits |= HHMS_LIMIT_ANALYSIS_CELLS;
+                analysis->complete = 0;
                 return 0;
-            cmap[i][k] = id;
+            }
+            cell_map[i][k] = id;
         }
     }
-    if (ncells == 0)
+    if (cell_count == 0)
         return 0;
 
-    int parent[MAX_CELLS];
-    for (int i = 0; i < ncells; i++)
+    static int parent[HHMS_MAX_TILES];
+    static int seen[HHMS_MAX_TILES];
+    for (int i = 0; i < cell_count; i++)
         parent[i] = i;
-    for (int i = 0; i < nc; i++) {
-        if (cs[i].n <= 0)
-            continue;
-        int a = cmap[i][0];
-        for (int k = 1; k < cs[i].n; k++)
-            uf_union(parent, a, cmap[i][k]);
+    memset(seen, 0, sizeof(int) * (size_t)cell_count);
+    for (int i = 0; i < constraint_count; i++) {
+        int first = cell_map[i][0];
+        for (int k = 1; k < constraints[i].n; k++)
+            union_cells(parent, first, cell_map[i][k]);
     }
 
     int changed = 0;
-    int seen[MAX_CELLS];
-    memset(seen, 0, sizeof(seen));
-    for (int root_i = 0; root_i < ncells; root_i++) {
-        int root = uf_find(parent, root_i);
+    for (int root_item = 0; root_item < cell_count; root_item++) {
+        int root = union_find(parent, root_item);
         if (seen[root])
             continue;
         seen[root] = 1;
-
         int local[HHMS_ENUM_MAX];
-        int ln = 0;
-        for (int i = 0; i < ncells; i++) {
-            if (uf_find(parent, i) == root) {
-                if (ln >= HHMS_ENUM_MAX) {
-                    ln = -1;
-                    break;
-                }
-                local[ln++] = i;
+        int local_count = 0;
+        int too_large = 0;
+        for (int i = 0; i < cell_count; i++) {
+            if (union_find(parent, i) != root)
+                continue;
+            if (local_count >= HHMS_ENUM_MAX) {
+                too_large = 1;
+                break;
             }
+            local[local_count++] = i;
         }
-        if (ln < 0)
+        if (too_large) {
+            analysis->limits |= HHMS_LIMIT_ENUM_COMPONENT;
+            analysis->complete = 0;
+            if (!promote)
+                mark_limited_component(analysis, cells, cell_count, parent, root);
             continue;
+        }
 
-        EnumAcc acc;
-        memset(&acc, 0, sizeof(acc));
-        acc.n = ln;
-        int glob_to_loc[MAX_CELLS];
-        memset(glob_to_loc, -1, sizeof(glob_to_loc));
-        for (int i = 0; i < ln; i++)
-            glob_to_loc[local[i]] = i;
+        Enumeration enumeration;
+        memset(&enumeration, 0, sizeof(enumeration));
+        enumeration.n = local_count;
+        static int global_to_local[HHMS_MAX_TILES];
+        memset(global_to_local, -1, sizeof(int) * (size_t)cell_count);
+        for (int i = 0; i < local_count; i++)
+            global_to_local[local[i]] = i;
 
-        int overflow = 0;
-        for (int i = 0; i < nc; i++) {
-            if (cs[i].n <= 0)
+        for (int i = 0; i < constraint_count; i++) {
+            if (union_find(parent, cell_map[i][0]) != root)
                 continue;
-            if (uf_find(parent, cmap[i][0]) != root)
-                continue;
+            if (enumeration.constraint_count >= HHMS_ENUM_MAX * 8) {
+                analysis->limits |= HHMS_LIMIT_ENUM_COMPONENT;
+                analysis->complete = 0;
+                too_large = 1;
+                break;
+            }
             unsigned mask = 0;
-            for (int k = 0; k < cs[i].n; k++) {
-                int loc = glob_to_loc[cmap[i][k]];
-                if (loc < 0)
-                    continue;
-                mask |= 1u << loc;
+            for (int k = 0; k < constraints[i].n; k++) {
+                int local_index = global_to_local[cell_map[i][k]];
+                if (local_index >= 0)
+                    mask |= 1u << local_index;
             }
-            if (acc.nc < 256) {
-                acc.cs[acc.nc].mask = mask;
-                acc.cs[acc.nc].need = cs[i].need;
-                acc.nc++;
-            } else {
-                overflow = 1;
-            }
+            BitConstraint *bit_constraint =
+                &enumeration.constraints[enumeration.constraint_count++];
+            bit_constraint->mask = mask;
+            bit_constraint->need = constraints[i].need;
+            bit_constraint->constraint_index = i;
         }
-        if (overflow || acc.nc == 0 || acc.n == 0)
+        if (too_large || enumeration.constraint_count == 0) {
+            if (too_large && !promote)
+                mark_limited_component(analysis, cells, cell_count, parent, root);
             continue;
+        }
 
-        enum_rec(&acc, 0, 0);
-        if (acc.nvalid == 0) {
-            m->contradiction = 1;
+        enumerate(&enumeration, 0, 0);
+        if (enumeration.valid == 0) {
+            for (int i = 0; i < constraint_count; i++) {
+                if (union_find(parent, cell_map[i][0]) == root) {
+                    mark_conflict(analysis, constraints[i].clue_x,
+                                  constraints[i].clue_y, HHMS_REASON_ENUMERATION,
+                                  constraints[i].clue_x, constraints[i].clue_y, 0, 0);
+                }
+            }
             continue;
         }
-        for (int i = 0; i < ln; i++) {
+
+        int reason_constraint = enumeration.constraints[0].constraint_index;
+        for (int i = 0; i < local_count; i++) {
             int x = cells[local[i]].x;
             int y = cells[local[i]].y;
-            float p = (float)acc.minec[i] / (float)acc.nvalid;
-            if (acc.minec[i] == acc.nvalid)
-                changed |= mark_mine(m, x, y);
-            else if (acc.minec[i] == 0)
-                changed |= mark_safe(m, x, y);
-            else if (write_odds) {
-                HhmsTile *t = hhms_touch(m, x, y);
-                if (t && t->mark == HHMS_MARK_NONE)
-                    t->p_mine = p;
+            uint64_t mines = enumeration.mine_count[i];
+            if (!promote) {
+                if (write_models) {
+                    HhmsAnalysisCell *cell = analysis_touch(analysis, x, y);
+                    if (cell && cell->mark == HHMS_MARK_NONE) {
+                        cell->mine_models = mines;
+                        cell->total_models = enumeration.valid;
+                        set_reason(cell, HHMS_REASON_ENUMERATION,
+                                   constraints[reason_constraint].clue_x,
+                                   constraints[reason_constraint].clue_y, 0, 0);
+                    }
+                }
+            } else if (mines == enumeration.valid) {
+                changed |= mark_mine(map, analysis, x, y, HHMS_REASON_ENUMERATION,
+                                     constraints[reason_constraint].clue_x,
+                                     constraints[reason_constraint].clue_y, 0, 0);
+            } else if (mines == 0) {
+                changed |= mark_safe(map, analysis, x, y, HHMS_REASON_ENUMERATION,
+                                     constraints[reason_constraint].clue_x,
+                                     constraints[reason_constraint].clue_y, 0, 0);
+            } else if (write_models) {
+                HhmsAnalysisCell *cell = analysis_touch(analysis, x, y);
+                if (cell && cell->mark == HHMS_MARK_NONE &&
+                    cell->total_models == 0 && !cell->model_limited) {
+                    cell->mine_models = mines;
+                    cell->total_models = enumeration.valid;
+                    set_reason(cell, HHMS_REASON_ENUMERATION,
+                               constraints[reason_constraint].clue_x,
+                               constraints[reason_constraint].clue_y, 0, 0);
+                }
             }
         }
     }
     return changed;
 }
 
-void hhms_solve(HhmsMap *m)
+static void fail_closed(HhmsAnalysis *analysis)
 {
-    m->contradiction = 0;
-    hhms_drop_ephemeral(m);
+    for (int i = 0; i < analysis->ncells; i++) {
+        HhmsAnalysisCell *cell = &analysis->cells[i];
+        if (cell->mark == HHMS_MARK_CONFLICT)
+            continue;
+        cell->mark = HHMS_MARK_NONE;
+        cell->reason = HHMS_REASON_NONE;
+        cell->mine_models = 0;
+        cell->total_models = 0;
+        memset(cell->reason_x, 0, sizeof(cell->reason_x));
+        memset(cell->reason_y, 0, sizeof(cell->reason_y));
+    }
+}
 
-    for (int pass = 0; pass < 32; pass++) {
-        int changed = 0;
-        for (int i = 0; i < 32; i++) {
-            int c = apply_simple(m);
-            c |= apply_subset(m);
-            changed |= c;
-            if (!c)
-                break;
-        }
-        changed |= apply_enum(m, 0);
-        if (!changed)
+void hhms_solve(const HhmsMap *map, HhmsAnalysis *analysis)
+{
+    hhms_analysis_init(analysis);
+    /* Preserve model totals from the original component before deductions shrink it. */
+    apply_enumeration(map, analysis, 1, 0);
+    for (;;) {
+        int changed;
+        do {
+            changed = apply_simple(map, analysis);
+            changed |= apply_subset(map, analysis);
+        } while (changed);
+        if (!apply_enumeration(map, analysis, 0, 1))
             break;
     }
-    apply_enum(m, 1);
-
-    for (int i = 0; i < m->ntiles; i++) {
-        HhmsTile *t = &m->tiles[i];
-        if (t->kind == HHMS_MINE)
-            t->p_mine = 1.f;
-        else if (t->kind == HHMS_CLEAR || t->kind == HHMS_OPEN)
-            t->p_mine = 0.f;
-        else if (t->mark == HHMS_MARK_MINE)
-            t->p_mine = 1.f;
-        else if (t->mark == HHMS_MARK_SAFE)
-            t->p_mine = 0.f;
-    }
+    apply_enumeration(map, analysis, 1, 1);
+    analysis->complete = analysis->limits == HHMS_LIMIT_NONE;
+    if (analysis->contradiction)
+        fail_closed(analysis);
 }

@@ -4,18 +4,83 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  core:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=ON
-      - name: Test
-        run: cmake --build build --config Release --target hhms_test && ctest --test-dir build -C Release --output-on-failure
-      - name: GUI
-        run: cmake --build build --config Release --target hhms
+      - name: Configure without GUI dependencies
+        run: >-
+          cmake -S . -B build-core
+          -DCMAKE_BUILD_TYPE=Release
+          -DHHMS_BUILD_GUI=OFF
+      - name: Build core tests
+        run: cmake --build build-core --config Release --target hhms_test hhms_app_test --parallel
+      - name: Run core tests
+        run: ctest --test-dir build-core -C Release --output-on-failure
+
+  gui:
+    name: GUI compile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libgtk-3-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libx11-dev \
+            pkg-config
+      - name: Configure GUI
+        run: >-
+          cmake -S . -B build-gui
+          -DCMAKE_BUILD_TYPE=Release
+          -DHHMS_BUILD_GUI=ON
+      - name: Build GUI
+        run: cmake --build build-gui --config Release --target hhms --parallel
+
+  sanitizers:
+    name: Linux Clang ASan and UBSan
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure sanitized core tests
+        run: >-
+          cmake -S . -B build-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DHHMS_BUILD_GUI=OFF
+          -DHHMS_ENABLE_SANITIZERS=ON
+      - name: Build sanitized core tests
+        run: cmake --build build-sanitize --target hhms_test hhms_app_test --parallel
+      - name: Run sanitized core tests
+        run: ctest --test-dir build-sanitize --output-on-failure

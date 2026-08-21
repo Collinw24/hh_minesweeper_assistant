@@ -1,23 +1,31 @@
-.PHONY: all debug test gui clean
+.PHONY: all gui debug test test-sanitize clean
 
 BUILD ?= build
+TEST_BUILD ?= build-test
+SANITIZE_BUILD ?= build-test-sanitize
 CMAKE ?= cmake
 
 all: gui
 
-$(BUILD)/CMakeCache.txt:
-	$(CMAKE) -B $(BUILD) -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=ON
+gui:
+	$(CMAKE) -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=ON
+	$(CMAKE) --build $(BUILD) --config Release --target hhms
 
 debug:
-	$(CMAKE) -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug -DHHMS_BUILD_GUI=ON
-	$(CMAKE) --build $(BUILD)
+	$(CMAKE) -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug -DHHMS_BUILD_GUI=ON
+	$(CMAKE) --build $(BUILD) --config Debug --target hhms
 
-test: $(BUILD)/CMakeCache.txt
-	$(CMAKE) --build $(BUILD) --target hhms_test
-	$(CMAKE) -E chdir $(BUILD) ctest --output-on-failure
+test:
+	$(CMAKE) -S . -B $(TEST_BUILD) -DCMAKE_BUILD_TYPE=Release -DHHMS_BUILD_GUI=OFF
+	$(CMAKE) --build $(TEST_BUILD) --config Release --target hhms_test hhms_app_test
+	$(CMAKE) -E chdir $(TEST_BUILD) ctest -C Release --output-on-failure
 
-gui: $(BUILD)/CMakeCache.txt
-	$(CMAKE) --build $(BUILD) --target hhms
+test-sanitize:
+	$(CMAKE) -S . -B $(SANITIZE_BUILD) -DCMAKE_BUILD_TYPE=Debug -DHHMS_BUILD_GUI=OFF -DHHMS_ENABLE_SANITIZERS=ON
+	$(CMAKE) --build $(SANITIZE_BUILD) --config Debug --target hhms_test hhms_app_test
+	$(CMAKE) -E chdir $(SANITIZE_BUILD) ctest -C Debug --output-on-failure
 
 clean:
-	rm -rf $(BUILD)
+	$(CMAKE) -E remove_directory $(BUILD)
+	$(CMAKE) -E remove_directory $(TEST_BUILD)
+	$(CMAKE) -E remove_directory $(SANITIZE_BUILD)
